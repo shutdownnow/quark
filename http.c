@@ -761,6 +761,11 @@ http_prepare_response(const struct request *req, struct response *res,
 				goto err;
 			}
 		}
+		/* copy the found index back to the final path */
+		if (esnprintf(res->path, sizeof(res->path), "%s", tmpuri)) {
+			s = S_REQUEST_TOO_LARGE;
+			goto err;
+		}
 	}
 
 	/* modified since */
