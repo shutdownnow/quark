@@ -586,12 +586,6 @@ main(int argc, char *argv[])
 		}
 	}
 
-	/* raise the process limit (2 + nthreads) */
-	rlim.rlim_cur = rlim.rlim_max = 2 + nthreads;
-	if (setrlimit(RLIMIT_NPROC, &rlim) < 0) {
-		die("setrlimit RLIMIT_NPROC:");
-	}
-
 	/* validate user and group */
 	errno = 0;
 	if (!user || !(pwd = getpwnam(user))) {
@@ -608,6 +602,17 @@ main(int argc, char *argv[])
 	setpgid(0, 0);
 
 	handlesignals(sigcleanup);
+
+	/* set the fd-limit (3 initial + 4 per thread) */
+	rlim.rlim_cur = rlim.rlim_max = 3 + 4 * (2 + nthreads);
+	if (setrlimit(RLIMIT_NOFILE, &rlim) < 0) {
+		if (errno == EPERM) {
+			die("You need to run as root or have "
+			    "CAP_SYS_RESOURCE set");
+		} else {
+			die("setrlimit:");
+		}
+	}
 
 	/* create a nonblocking listening socket for each thread */
 	if (!(insock = reallocarray(insock, nthreads, sizeof(*insock)))) {
@@ -640,6 +645,17 @@ main(int argc, char *argv[])
 			die("signal: Failed to set SIG_IGN on SIGPIPE");
 		}
 
+		/* set the thread limit (2 + nthreads) */
+		rlim.rlim_cur = rlim.rlim_max = 2 + nthreads;
+		if (setrlimit(RLIMIT_NPROC, &rlim) < 0) {
+			if (errno == EPERM) {
+				die("You need to run as root or have "
+				    "CAP_SYS_RESOURCE set");
+			} else {
+				die("setrlimit:");
+			}
+		}
+
 		/* limit ourselves to reading the servedir and block further unveils */
 		eunveil(servedir, "r");
 		eunveil(NULL, NULL);
@@ -649,31 +665,51 @@ main(int argc, char *argv[])
 			die("chdir '%s':", servedir);
 		}
 		if (chroot(".") < 0) {
-			die("chroot .:");
+			if (errno == EPERM) {
+				die("You need to run as root or have "
+				    "CAP_SYS_CHROOT set");
+			} else {
+				die("chroot:");
+			}
 		}
 
 		/* drop root */
+		if (pwd->pw_uid == 0 || grp->gr_gid == 0) {
+			die("Won't run under root %s for hopefully obvious reasons",
+			    (pwd->pw_uid == 0) ? (grp->gr_gid == 0) ?
+			    "user and group" : "user" : "group");
+		}
+
 		if (setgroups(1, &(grp->gr_gid)) < 0) {
-			die("setgroups:");
+			if (errno == EPERM) {
+				die("You need to run as root or have "
+				    "CAP_SETGID set");
+			} else {
+				die("setgroups:");
+			}
 		}
 		if (setgid(grp->gr_gid) < 0) {
-			die("setgid:");
+			if (errno == EPERM) {
+				die("You need to run as root or have "
+				    "CAP_SETGID set");
+			} else {
+				die("setgid:");
+			}
+
 		}
 		if (setuid(pwd->pw_uid) < 0) {
-			die("setuid:");
+			if (errno == EPERM) {
+				die("You need to run as root or have "
+				    "CAP_SETUID set");
+			} else {
+				die("setuid:");
+			}
 		}
 
 		if (udsname) {
 			epledge("stdio rpath proc unix", NULL);
 		} else {
 			epledge("stdio rpath proc inet", NULL);
-		}
-
-		if (getuid() == 0) {
-			die("Won't run as root user", argv0);
-		}
-		if (getgid() == 0) {
-			die("Won't run as root group", argv0);
 		}
 
 		/* accept incoming connections */
