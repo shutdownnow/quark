@@ -1,5 +1,6 @@
 /* See LICENSE file for copyright and license details. */
 #include <arpa/inet.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -73,7 +74,13 @@ sock_get_ips_arr(const char *host, const char* port, int *sockfd,
 	freeaddrinfo(ai);
 	if (!p) {
 		/* we exhaustet the addrinfo-list and found no connection */
-		warn("bind:");
+		if (errno == EACCES) {
+			warn("You need to run as root or have "
+			     "CAP_NET_BIND_SERVICE set to bind to "
+			     "privileged ports");
+		} else {
+			warn("bind:");
+		}
 		return 1;
 	}
 
