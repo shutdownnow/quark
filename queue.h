@@ -29,4 +29,6 @@ ssize_t queue_wait(int, queue_event *, size_t);
 int queue_event_get_fd(const queue_event *);
 void *queue_event_get_ptr(const queue_event *);
 
+int queue_event_is_dropped(const queue_event *e);
+
 #endif /* QUEUE_H */

@@ -80,11 +80,11 @@ queue_add_fd(int qfd, int fd, enum queue_event_type t, int shared,
 			return 1;
 		}
 	#else
-		kevent e;
+		struct kevent e;
 		int events;
 
 		/* prepare event flag */
-		event = (shared) ? 0 : EV_CLEAR;
+		events = (shared) ? 0 : EV_CLEAR;
 
 		switch (t) {
 		case QUEUE_EVENT_IN:
@@ -95,7 +95,7 @@ queue_add_fd(int qfd, int fd, enum queue_event_type t, int shared,
 			break;
 		}
 
-		EV_SET(&e, fd, events, EV_ADD, 0, 0, 0);
+		EV_SET(&e, fd, events, EV_ADD, 0, 0, (void *)data);
 
 		if (kevent(qfd, &e, 1, NULL, 0, NULL) < 0) {
 			warn("kevent:");
@@ -139,7 +139,7 @@ queue_mod_fd(int qfd, int fd, enum queue_event_type t, const void *data)
 			return 1;
 		}
 	#else
-		kevent e;
+		struct kevent e;
 		int events;
 
 		events = EV_CLEAR;
@@ -153,7 +153,7 @@ queue_mod_fd(int qfd, int fd, enum queue_event_type t, const void *data)
 			break;
 		}
 
-		EV_SET(&e, fd, events, EV_ADD, 0, 0, 0);
+		EV_SET(&e, fd, events, EV_ADD, 0, 0, (void *)data);
 
 		if (kevent(qfd, &e, 1, NULL, 0, NULL) < 0) {
 			warn("kevent:");
@@ -175,7 +175,7 @@ queue_rem_fd(int qfd, int fd)
 			return 1;
 		}
 	#else
-		kevent e;
+		struct kevent e;
 
 		EV_SET(&e, fd, 0, EV_DELETE, 0, 0, 0);
 
@@ -199,7 +199,7 @@ queue_wait(int qfd, queue_event *e, size_t elen)
 			return -1;
 		}
 	#else
-		if ((nready = kevent(qfd, NULL, 0, e, elen, NULL) < 0) {
+		if ((nready = kevent(qfd, NULL, 0, e, elen, NULL)) < 0) {
 			warn("kevent:");
 			return 1;
 		}
@@ -225,5 +225,15 @@ queue_event_get_ptr(const queue_event *e)
 		return e->data.ptr;
 	#else
 		return e->udata;
+	#endif
+}
+
+int
+queue_event_is_dropped(const queue_event *e)
+{
+	#ifdef __linux__
+		return (e->events & (EPOLLERR | EPOLLHUP)) ? 1 : 0;
+	#else
+		return (e->flags & EV_EOF) ? 1 : 0;
 	#endif
 }

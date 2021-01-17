@@ -243,7 +243,7 @@ thread_method(void *data)
 
 		/* handle events */
 		for (i = 0; i < (size_t)nready; i++) {
-			if (event[i].events & (EPOLLERR | EPOLLHUP)) {
+			if (queue_event_is_dropped(&event[i])) {
 				fd = queue_event_get_fd(&event[i]);
 
 				if (fd != d->insock) {
