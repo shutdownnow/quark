@@ -347,7 +347,14 @@ handle_connections(int *insock, size_t nthreads, size_t nslots,
 	}
 	for (i = 0; i < nthreads; i++) {
 		if (pthread_create(&thread[i], NULL, thread_method, &d[i]) != 0) {
-			die("pthread_create:");
+			if (errno == EAGAIN) {
+				die("You need to run as root or have "
+				    "CAP_SYS_RESOURCE set, or are trying "
+				    "to create more threads than the "
+				    "system can offer");
+			} else {
+				die("pthread_create:");
+			}
 		}
 	}
 
@@ -603,12 +610,20 @@ main(int argc, char *argv[])
 
 	handlesignals(sigcleanup);
 
-	/* set the fd-limit (3 initial + 4 per thread) */
-	rlim.rlim_cur = rlim.rlim_max = 3 + 4 * (2 + nthreads);
+	/*
+	 * set the maximum number of open file descriptors as needed
+	 *  - 3 initial fd's
+	 *  - nthreads fd's for the listening socket
+	 *  - (nthreads * nslots) fd's for the connection-fd
+	 *  - (5 * nthreads) fd's for general purpose thread-use
+	 */
+	rlim.rlim_cur = rlim.rlim_max = 3 + nthreads + nthreads * nslots +
+	                                5 * nthreads;
 	if (setrlimit(RLIMIT_NOFILE, &rlim) < 0) {
 		if (errno == EPERM) {
 			die("You need to run as root or have "
-			    "CAP_SYS_RESOURCE set");
+			    "CAP_SYS_RESOURCE set, or are asking for more "
+			    "file descriptors than the system can offer");
 		} else {
 			die("setrlimit:");
 		}
@@ -645,15 +660,32 @@ main(int argc, char *argv[])
 			die("signal: Failed to set SIG_IGN on SIGPIPE");
 		}
 
-		/* set the thread limit (2 + nthreads) */
-		rlim.rlim_cur = rlim.rlim_max = 2 + nthreads;
-		if (setrlimit(RLIMIT_NPROC, &rlim) < 0) {
-			if (errno == EPERM) {
-				die("You need to run as root or have "
-				    "CAP_SYS_RESOURCE set");
-			} else {
-				die("setrlimit:");
+		/*
+		 * try increasing the thread-limit by the number
+		 * of threads we need (which is the only reliable
+		 * workaround I know given the thread-limit is per user
+		 * rather than per process), but ignore EPERM errors,
+		 * because this most probably means the user has already
+		 * set the value to the kernel's limit, and there's not
+		 * much we can do in any other case.
+		 * There's also no danger of overflow as the value
+		 * returned by getrlimit() is way below the limits of the
+		 * rlim_t datatype.
+		 */
+		if (getrlimit(RLIMIT_NPROC, &rlim) < 0) {
+			die("getrlimit:");
+		}
+		if (rlim.rlim_max == RLIM_INFINITY) {
+			if (rlim.rlim_cur != RLIM_INFINITY) {
+				/* try increasing current limit by nthreads */
+				rlim.rlim_cur += nthreads;
 			}
+		} else {
+			/* try increasing current and hard limit by nthreads */
+			rlim.rlim_cur = rlim.rlim_max += nthreads;
+		}
+		if (setrlimit(RLIMIT_NPROC, &rlim) < 0 && errno != EPERM) {
+			die("setrlimit()");
 		}
 
 		/* limit ourselves to reading the servedir and block further unveils */
