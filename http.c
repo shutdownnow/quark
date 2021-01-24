@@ -760,6 +760,13 @@ http_prepare_response(const struct request *req, struct response *res,
 				    S_FORBIDDEN : S_NOT_FOUND;
 				goto err;
 			}
+		} else {
+			/* docindex is valid, write tmpuri to response-path */
+			if (esnprintf(res->path, sizeof(res->path), "%s",
+			              tmpuri)) {
+				s = S_REQUEST_TOO_LARGE;
+				goto err;
+			}
 		}
 	}
 
@@ -800,7 +807,7 @@ http_prepare_response(const struct request *req, struct response *res,
 
 	/* mime */
 	mime = "application/octet-stream";
-	if ((p = strrchr(realuri, '.'))) {
+	if ((p = strrchr(res->path, '.'))) {
 		for (i = 0; i < LEN(mimes); i++) {
 			if (!strcmp(mimes[i].ext, p + 1)) {
 				mime = mimes[i].type;
