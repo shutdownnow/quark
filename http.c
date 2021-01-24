@@ -760,11 +760,12 @@ http_prepare_response(const struct request *req, struct response *res,
 				    S_FORBIDDEN : S_NOT_FOUND;
 				goto err;
 			}
-		}
-		/* copy the found index back to the final path */
-		if (esnprintf(res->path, sizeof(res->path), "%s", tmpuri)) {
-			s = S_REQUEST_TOO_LARGE;
-			goto err;
+		} else {
+			/* docindex is valid, write tmpuri to response-path */
+			if (esnprintf(res->path, sizeof(res->path), "%s", tmpuri)) {
+				s = S_REQUEST_TOO_LARGE;
+				goto err;
+			}
 		}
 	}
 
