@@ -806,7 +806,7 @@ http_prepare_response(const struct request *req, struct response *res,
 
 	/* mime */
 	mime = "application/octet-stream";
-	if ((p = strrchr(realuri, '.'))) {
+	if ((p = strrchr(res->path, '.'))) {
 		for (i = 0; i < LEN(mimes); i++) {
 			if (!strcmp(mimes[i].ext, p + 1)) {
 				mime = mimes[i].type;
