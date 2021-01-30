@@ -154,7 +154,7 @@ http_recv_header(int fd, struct buffer *buf, int *done)
 
 	while (1) {
 		if ((r = read(fd, buf->data + buf->len,
-		              sizeof(buf->data) - buf->len)) <= 0) {
+		              sizeof(buf->data) - buf->len)) < 0) {
 			if (errno == EAGAIN || errno == EWOULDBLOCK) {
 				/*
 				 * socket is drained, return normally,
@@ -166,6 +166,14 @@ http_recv_header(int fd, struct buffer *buf, int *done)
 				s = S_REQUEST_TIMEOUT;
 				goto err;
 			}
+		} else if (r == 0) {
+			/*
+			 * unexpected EOF because the client probably
+			 * hung up. This is technically a bad request,
+			 * because it's incomplete
+			 */
+			s = S_BAD_REQUEST;
+			goto err;
 		}
 		buf->len += r;
 
