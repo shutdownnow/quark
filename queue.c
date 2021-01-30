@@ -77,7 +77,7 @@ queue_add_fd(int qfd, int fd, enum queue_event_type t, int shared,
 		/* register fd in the interest list */
 		if (epoll_ctl(qfd, EPOLL_CTL_ADD, fd, &e) < 0) {
 			warn("epoll_ctl:");
-			return 1;
+			return -1;
 		}
 	#else
 		struct kevent e;
@@ -99,7 +99,7 @@ queue_add_fd(int qfd, int fd, enum queue_event_type t, int shared,
 
 		if (kevent(qfd, &e, 1, NULL, 0, NULL) < 0) {
 			warn("kevent:");
-			return 1;
+			return -1;
 		}
 	#endif
 
@@ -136,7 +136,7 @@ queue_mod_fd(int qfd, int fd, enum queue_event_type t, const void *data)
 		/* register fd in the interest list */
 		if (epoll_ctl(qfd, EPOLL_CTL_MOD, fd, &e) < 0) {
 			warn("epoll_ctl:");
-			return 1;
+			return -1;
 		}
 	#else
 		struct kevent e;
@@ -157,7 +157,7 @@ queue_mod_fd(int qfd, int fd, enum queue_event_type t, const void *data)
 
 		if (kevent(qfd, &e, 1, NULL, 0, NULL) < 0) {
 			warn("kevent:");
-			return 1;
+			return -1;
 		}
 	#endif
 
@@ -172,7 +172,7 @@ queue_rem_fd(int qfd, int fd)
 
 		if (epoll_ctl(qfd, EPOLL_CTL_DEL, fd, &e) < 0) {
 			warn("epoll_ctl:");
-			return 1;
+			return -1;
 		}
 	#else
 		struct kevent e;
@@ -181,7 +181,7 @@ queue_rem_fd(int qfd, int fd)
 
 		if (kevent(qfd, &e, 1, NULL, 0, NULL) < 0) {
 			warn("kevent:");
-			return 1;
+			return -1;
 		}
 	#endif
 
@@ -201,7 +201,7 @@ queue_wait(int qfd, queue_event *e, size_t elen)
 	#else
 		if ((nready = kevent(qfd, NULL, 0, e, elen, NULL)) < 0) {
 			warn("kevent:");
-			return 1;
+			return -1;
 		}
 	#endif
 

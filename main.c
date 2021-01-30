@@ -212,7 +212,8 @@ thread_method(void *data)
 	queue_event *event = NULL;
 	struct connection *connection, *c;
 	struct worker_data *d = (struct worker_data *)data;
-	int qfd, nready, fd;
+	int qfd, fd;
+	ssize_t nready;
 	size_t i;
 
 	/* allocate connections */
