@@ -368,12 +368,12 @@ static int
 normabspath(char *path)
 {
 	size_t len;
-	int last = 0;
+	int dirty = 0, last = 0;
 	char *p, *q;
 
 	/* require and skip first slash */
 	if (path[0] != '/') {
-		return 1;
+		return -1;
 	}
 	p = path + 1;
 
@@ -387,7 +387,9 @@ normabspath(char *path)
 			last = 1;
 		}
 
-		if (p == q || (q - p == 1 && p[0] == '.')) {
+		if (*p == '\0') {
+			break;
+		} else if (p == q || (q - p == 1 && p[0] == '.')) {
 			/* "/" or "./" */
 			goto squash;
 		} else if (q - p == 2 && p[0] == '.' && p[1] == '.') {
@@ -412,9 +414,10 @@ squash:
 			memmove(p, q + 1, len - ((q + 1) - path) + 2);
 			len -= (q + 1) - p;
 		}
+		dirty = 1;
 	}
 
-	return 0;
+	return dirty;
 }
 
 static enum status
@@ -562,7 +565,7 @@ http_prepare_response(const struct request *req, struct response *res,
 	struct tm tm = { 0 };
 	struct vhost *vhost;
 	size_t len, i;
-	int hasport, ipv6host;
+	int dirty = 0, hasport, ipv6host;
 	static char realuri[PATH_MAX], tmpuri[PATH_MAX];
 	char *p, *mime;
 	const char *targethost;
@@ -570,11 +573,29 @@ http_prepare_response(const struct request *req, struct response *res,
 	/* empty all response fields */
 	memset(res, 0, sizeof(*res));
 
-	/* make a working copy of the URI and normalize it */
+	/*
+	 * make a working copy of the URI, strip queries and fragments
+	 * (ignorable according to RFC 3986 section 3) and normalize it
+	 */
 	memcpy(realuri, req->uri, sizeof(realuri));
-	if (normabspath(realuri)) {
+
+	if ((p = strchr(realuri, '?'))) {
+		*p = '\0';
+	} else if ((p = strchr(realuri, '#'))) {
+		*p = '\0';
+	}
+
+	switch (normabspath(realuri)) {
+	case -1:
 		s = S_BAD_REQUEST;
 		goto err;
+	case 0:
+		/* string is unchanged */
+		break;
+	case 1:
+		/* string was changed */
+		dirty = 1;
+		break;
 	}
 
 	/* match vhost */
@@ -594,10 +615,12 @@ http_prepare_response(const struct request *req, struct response *res,
 		}
 
 		/* if we have a vhost prefix, prepend it to the URI */
-		if (vhost->prefix &&
-		    prepend(realuri, LEN(realuri), vhost->prefix)) {
-			s = S_REQUEST_TOO_LARGE;
-			goto err;
+		if (vhost->prefix) {
+			if (prepend(realuri, LEN(realuri), vhost->prefix)) {
+				s = S_REQUEST_TOO_LARGE;
+				goto err;
+			}
+			dirty = 1;
 		}
 	}
 
@@ -618,14 +641,23 @@ http_prepare_response(const struct request *req, struct response *res,
 				s = S_REQUEST_TOO_LARGE;
 				goto err;
 			}
+			dirty = 1;
 			break;
 		}
 	}
 
 	/* normalize URI again, in case we introduced dirt */
-	if (normabspath(realuri)) {
+	switch (normabspath(realuri)) {
+	case -1:
 		s = S_BAD_REQUEST;
 		goto err;
+	case 0:
+		/* string is unchanged */
+		break;
+	case 1:
+		/* string was changed */
+		dirty = 1;
+		break;
 	}
 
 	/* stat the relative path derived from the URI */
@@ -644,6 +676,7 @@ http_prepare_response(const struct request *req, struct response *res,
 		if (len > 0 && realuri[len - 1] != '/') {
 			realuri[len] = '/';
 			realuri[len + 1] = '\0';
+			dirty = 1;
 		}
 	}
 
@@ -658,10 +691,10 @@ http_prepare_response(const struct request *req, struct response *res,
 	}
 
 	/*
-	 * redirect if the original URI and the "real" URI differ or if
-	 * the requested host is non-canonical
+	 * redirect if the URI needs to be redirected or the requested
+	 * host is non-canonical
 	 */
-	if (strcmp(req->uri, realuri) || (srv->vhost && vhost &&
+	if (dirty || (srv->vhost && vhost &&
 	    strcmp(req->field[REQ_HOST], vhost->chost))) {
 		res->status = S_MOVED_PERMANENTLY;
 
@@ -716,12 +749,12 @@ http_prepare_response(const struct request *req, struct response *res,
 		 * (optionally including the vhost servedir as a prefix)
 		 * into the actual response-path
 		 */
-		if (esnprintf(res->uri, sizeof(res->uri), "%s", req->uri)) {
+		if (esnprintf(res->uri, sizeof(res->uri), "%s", realuri)) {
 			s = S_REQUEST_TOO_LARGE;
 			goto err;
 		}
 		if (esnprintf(res->path, sizeof(res->path), "%s%s",
-		    vhost ? vhost->dir : "", RELPATH(req->uri))) {
+		    vhost ? vhost->dir : "", RELPATH(realuri))) {
 			s = S_REQUEST_TOO_LARGE;
 			goto err;
 		}
@@ -733,7 +766,7 @@ http_prepare_response(const struct request *req, struct response *res,
 		 * the URI
 		 */
 		if (esnprintf(tmpuri, sizeof(tmpuri), "%s%s",
-		              req->uri, srv->docindex)) {
+		              realuri, srv->docindex)) {
 			s = S_REQUEST_TOO_LARGE;
 			goto err;
 		}
