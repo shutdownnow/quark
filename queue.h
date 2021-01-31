@@ -26,8 +26,7 @@ int queue_mod_fd(int, int, enum queue_event_type, const void *);
 int queue_rem_fd(int, int);
 ssize_t queue_wait(int, queue_event *, size_t);
 
-int queue_event_get_fd(const queue_event *);
-void *queue_event_get_ptr(const queue_event *);
+void *queue_event_get_data(const queue_event *);
 
 int queue_event_is_dropped(const queue_event *e);
 

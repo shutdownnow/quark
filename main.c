@@ -210,9 +210,9 @@ static void *
 thread_method(void *data)
 {
 	queue_event *event = NULL;
-	struct connection *connection, *c;
+	struct connection *connection, *c, *newc;
 	struct worker_data *d = (struct worker_data *)data;
-	int qfd, fd;
+	int qfd;
 	ssize_t nready;
 	size_t i;
 
@@ -226,7 +226,7 @@ thread_method(void *data)
 		exit(1);
 	}
 
-	/* add insock to the interest list */
+	/* add insock to the interest list (with data=NULL) */
 	if (queue_add_fd(qfd, d->insock, QUEUE_EVENT_IN, 1, NULL) < 0) {
 		exit(1);
 	}
@@ -244,12 +244,12 @@ thread_method(void *data)
 
 		/* handle events */
 		for (i = 0; i < (size_t)nready; i++) {
-			if (queue_event_is_dropped(&event[i])) {
-				fd = queue_event_get_fd(&event[i]);
+			c = queue_event_get_data(&event[i]);
 
-				if (fd != d->insock) {
-					memset(queue_event_get_ptr(&event[i]),
-					       0, sizeof(struct connection));
+			if (queue_event_is_dropped(&event[i])) {
+				if (c != NULL) {
+					queue_rem_fd(qfd, c->fd);
+					close_connection(c);
 				}
 
 				printf("dropped a connection\n");
@@ -257,11 +257,11 @@ thread_method(void *data)
 				continue;
 			}
 
-			if (queue_event_get_fd(&event[i]) == d->insock) {
+			if (c == NULL) {
 				/* add new connection to the interest list */
-				if (!(c = accept_connection(d->insock,
-				                            connection,
-				                            d->nslots))) {
+				if (!(newc = accept_connection(d->insock,
+				                               connection,
+				                               d->nslots))) {
 					/*
 					 * the socket is either blocking
 					 * or something failed.
@@ -275,20 +275,19 @@ thread_method(void *data)
 				 * (we want IN, because we start
 				 * with receiving the header)
 				 */
-				if (queue_add_fd(qfd, c->fd,
+				if (queue_add_fd(qfd, newc->fd,
 				                 QUEUE_EVENT_IN,
-						 0, c) < 0) {
+						 0, newc) < 0) {
 					/* not much we can do here */
 					continue;
 				}
 			} else {
-				c = queue_event_get_ptr(&event[i]);
-
 				/* serve existing connection */
 				serve_connection(c, d->srv);
 
 				if (c->fd == 0) {
 					/* we are done */
+					memset(c, 0, sizeof(struct connection));
 					continue;
 				}
 

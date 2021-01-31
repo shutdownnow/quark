@@ -65,14 +65,8 @@ queue_add_fd(int qfd, int fd, enum queue_event_type t, int shared,
 			break;
 		}
 
-		/* set data */
-		if (data == NULL) {
-			/* the data is the fd itself */
-			e.data.fd = fd;
-		} else {
-			/* set data pointer */
-			e.data.ptr = (void *)data;
-		}
+		/* set data pointer */
+		e.data.ptr = (void *)data;
 
 		/* register fd in the interest list */
 		if (epoll_ctl(qfd, EPOLL_CTL_ADD, fd, &e) < 0) {
@@ -124,14 +118,8 @@ queue_mod_fd(int qfd, int fd, enum queue_event_type t, const void *data)
 			break;
 		}
 
-		/* set data */
-		if (data == NULL) {
-			/* the data is the fd itself */
-			e.data.fd = fd;
-		} else {
-			/* set data pointer */
-			e.data.ptr = (void *)data;
-		}
+		/* set data pointer */
+		e.data.ptr = (void *)data;
 
 		/* register fd in the interest list */
 		if (epoll_ctl(qfd, EPOLL_CTL_MOD, fd, &e) < 0) {
@@ -208,18 +196,8 @@ queue_wait(int qfd, queue_event *e, size_t elen)
 	return nready;
 }
 
-int
-queue_event_get_fd(const queue_event *e)
-{
-	#ifdef __linux__
-		return e->data.fd;
-	#else
-		return e->ident;
-	#endif
-}
-
 void *
-queue_event_get_ptr(const queue_event *e)
+queue_event_get_data(const queue_event *e)
 {
 	#ifdef __linux__
 		return e->data.ptr;
