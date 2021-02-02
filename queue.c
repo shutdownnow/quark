@@ -207,10 +207,10 @@ queue_event_get_data(const queue_event *e)
 }
 
 int
-queue_event_is_dropped(const queue_event *e)
+queue_event_is_error(const queue_event *e)
 {
 	#ifdef __linux__
-		return (e->events & (EPOLLERR | EPOLLHUP)) ? 1 : 0;
+		return (e->events & ~(EPOLLIN | EPOLLOUT)) ? 1 : 0;
 	#else
 		return (e->flags & EV_EOF) ? 1 : 0;
 	#endif

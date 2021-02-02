@@ -246,7 +246,7 @@ thread_method(void *data)
 		for (i = 0; i < (size_t)nready; i++) {
 			c = queue_event_get_data(&event[i]);
 
-			if (queue_event_is_dropped(&event[i])) {
+			if (queue_event_is_error(&event[i])) {
 				if (c != NULL) {
 					queue_rem_fd(qfd, c->fd);
 					close_connection(c);
