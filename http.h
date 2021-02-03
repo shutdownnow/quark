@@ -27,7 +27,9 @@ extern const char *req_method_str[];
 
 struct request {
 	enum req_method method;
-	char uri[PATH_MAX];
+	char path[PATH_MAX];
+	char query[FIELD_MAX];
+	char fragment[FIELD_MAX];
 	char field[NUM_REQ_FIELDS][FIELD_MAX];
 };
 
@@ -73,8 +75,9 @@ struct response {
 	enum res_type type;
 	enum status status;
 	char field[NUM_RES_FIELDS][FIELD_MAX];
-	char uri[PATH_MAX];
 	char path[PATH_MAX];
+	char internal_path[PATH_MAX];
+	struct vhost *vhost;
 	struct {
 		size_t lower;
 		size_t upper;

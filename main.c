@@ -45,8 +45,9 @@ logmsg(const struct connection *c)
 		inaddr_str[0] = '\0';
 	}
 
-	printf("%s\t%s\t%d\t%s\t%s\n", tstmp, inaddr_str, c->res.status,
-	       c->req.field[REQ_HOST], c->req.uri);
+	printf("%s\t%s\t%d\t%s\t%s%s%s%s%s\n", tstmp, inaddr_str, c->res.status,
+	       c->req.field[REQ_HOST], c->req.path, c->req.query[0] ? "?" : "",
+	       c->req.query, c->req.fragment[0] ? "#" : "", c->req.fragment);
 }
 
 static void

@@ -104,13 +104,13 @@ data_prepare_dirlisting_buf(const struct response *res,
 	memset(buf, 0, sizeof(*buf));
 
 	/* read directory */
-	if ((dirlen = scandir(res->path, &e, NULL, compareent)) < 0) {
+	if ((dirlen = scandir(res->internal_path, &e, NULL, compareent)) < 0) {
 		return S_FORBIDDEN;
 	}
 
 	if (*progress == 0) {
 		/* write listing header (sizeof(esc) >= PATH_MAX) */
-		html_escape(res->uri, esc, MIN(PATH_MAX, sizeof(esc)));
+		html_escape(res->path, esc, MIN(PATH_MAX, sizeof(esc)));
 		if (buffer_appendf(buf,
 		                   "<!DOCTYPE html>\n<html>\n\t<head>"
 		                   "<title>Index of %s</title></head>\n"
@@ -197,7 +197,7 @@ data_prepare_file_buf(const struct response *res, struct buffer *buf,
 	memset(buf, 0, sizeof(*buf));
 
 	/* open file */
-	if (!(fp = fopen(res->path, "r"))) {
+	if (!(fp = fopen(res->internal_path, "r"))) {
 		s = S_FORBIDDEN;
 		goto cleanup;
 	}

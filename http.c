@@ -205,7 +205,7 @@ http_parse_header(const char *h, struct request *req)
 {
 	struct in6_addr addr;
 	size_t i, mlen;
-	const char *p, *q;
+	const char *p, *q, *r, *s, *t;
 	char *m, *n;
 
 	/* empty the request struct */
@@ -235,16 +235,94 @@ http_parse_header(const char *h, struct request *req)
 	/* basis for next step */
 	p = h + mlen + 1;
 
-	/* TARGET */
+	/* RESOURCE */
+
+	/*
+	 * path?query#fragment
+	 * ^   ^     ^        ^
+	 * |   |     |        |
+	 * p   r     s        q
+	 *
+	 */
 	if (!(q = strchr(p, ' '))) {
 		return S_BAD_REQUEST;
 	}
-	if (q - p + 1 > PATH_MAX) {
+
+	/* search for first '?' */
+	for (r = p; r < q; r++) {
+		if (!isprint(*r)) {
+			return S_BAD_REQUEST;
+		}
+		if (*r == '?') {
+			break;
+		}
+	}
+	if (r == q) {
+		/* not found */
+		r = NULL;
+	}
+
+	/* search for first '#' */
+	for (s = p; s < q; s++) {
+		if (!isprint(*s)) {
+			return S_BAD_REQUEST;
+		}
+		if (*s == '#') {
+			break;
+		}
+	}
+	if (s == q) {
+		/* not found */
+		s = NULL;
+	}
+
+	if (r != NULL && s != NULL && s < r) {
+		/*
+		 * '#' comes before '?' and thus the '?' is literal,
+		 * because the query must come before the fragment
+		 */
+		r = NULL;
+	}
+
+	/* write path using temporary endpointer t */
+	if (r != NULL) {
+		/* resource contains a query, path ends at r */
+		t = r;
+	} else if (s != NULL) {
+		/* resource contains only a fragment, path ends at s */
+		t = s;
+	} else {
+		/* resource contains no queries, path ends at q */
+		t = q;
+	}
+	if ((size_t)(t - p + 1) > LEN(req->path)) {
 		return S_REQUEST_TOO_LARGE;
 	}
-	memcpy(req->uri, p, q - p);
-	req->uri[q - p] = '\0';
-	decode(req->uri, req->uri);
+	memcpy(req->path, p, t - p);
+	req->path[t - p] = '\0';
+	decode(req->path, req->path);
+
+	/* write query if present */
+	if (r != NULL) {
+		/* query ends either at s (if fragment present) or q */
+		t = (s != NULL) ? s : q;
+
+		if ((size_t)(t - (r + 1) + 1) > LEN(req->query)) {
+			return S_REQUEST_TOO_LARGE;
+		}
+		memcpy(req->query, r + 1, t - (r + 1));
+		req->query[t - (r + 1)] = '\0';
+	}
+
+	/* write fragment if present */
+	if (s != NULL) {
+		/* the fragment always starts at s + 1 and ends at q */
+		if ((size_t)(q - (s + 1) + 1) > LEN(req->fragment)) {
+			return S_REQUEST_TOO_LARGE;
+		}
+		memcpy(req->fragment, s + 1, q - (s + 1));
+		req->fragment[q - (s + 1)] = '\0';
+	}
 
 	/* basis for next step */
 	p = q + 1;
@@ -304,7 +382,7 @@ http_parse_header(const char *h, struct request *req)
 		if (!(q = strstr(p, "\r\n"))) {
 			return S_BAD_REQUEST;
 		}
-		if (q - p + 1 > FIELD_MAX) {
+		if ((size_t)(q - p + 1) > LEN(req->field[i])) {
 			return S_REQUEST_TOO_LARGE;
 		}
 		memcpy(req->field[i], p, q - p);
@@ -372,24 +450,24 @@ encode(const char src[PATH_MAX], char dest[PATH_MAX])
 	dest[i] = '\0';
 }
 
-static int
-normabspath(char *path)
+static enum status
+path_normalize(char *uri, int *redirect)
 {
 	size_t len;
-	int dirty = 0, last = 0;
+	int last = 0;
 	char *p, *q;
 
 	/* require and skip first slash */
-	if (path[0] != '/') {
-		return -1;
+	if (uri[0] != '/') {
+		return S_BAD_REQUEST;
 	}
-	p = path + 1;
+	p = uri + 1;
 
-	/* get length of path */
+	/* get length of URI */
 	len = strlen(p);
 
 	for (; !last; ) {
-		/* bound path component within (p,q) */
+		/* bound uri component within (p,q) */
 		if (!(q = strchr(p, '/'))) {
 			q = strchr(p, '\0');
 			last = 1;
@@ -402,9 +480,9 @@ normabspath(char *path)
 			goto squash;
 		} else if (q - p == 2 && p[0] == '.' && p[1] == '.') {
 			/* "../" */
-			if (p != path + 1) {
+			if (p != uri + 1) {
 				/* place p right after the previous / */
-				for (p -= 2; p > path && *p != '/'; p--);
+				for (p -= 2; p > uri && *p != '/'; p--);
 				p++;
 			}
 			goto squash;
@@ -417,15 +495,90 @@ squash:
 		/* squash (p,q) into void */
 		if (last) {
 			*p = '\0';
-			len = p - path;
+			len = p - uri;
 		} else {
-			memmove(p, q + 1, len - ((q + 1) - path) + 2);
+			memmove(p, q + 1, len - ((q + 1) - uri) + 2);
 			len -= (q + 1) - p;
 		}
-		dirty = 1;
+		if (redirect != NULL) {
+			*redirect = 1;
+		}
 	}
 
-	return dirty;
+	return 0;
+}
+
+static enum status
+path_add_vhost_prefix(char uri[PATH_MAX], int *redirect,
+                     const struct server *srv, const struct response *res)
+{
+	if (srv->vhost && res->vhost && res->vhost->prefix) {
+		if (prepend(uri, PATH_MAX, res->vhost->prefix)) {
+			return S_REQUEST_TOO_LARGE;
+		}
+		if (redirect != NULL) {
+			*redirect = 1;
+		}
+	}
+
+	return 0;
+}
+
+static enum status
+path_apply_prefix_mapping(char uri[PATH_MAX], int *redirect,
+                         const struct server *srv, const struct response *res)
+{
+	size_t i, len;
+
+	for (i = 0; i < srv->map_len; i++) {
+		len = strlen(srv->map[i].from);
+		if (!strncmp(uri, srv->map[i].from, len)) {
+			/*
+			 * if vhosts are enabled only apply mappings
+			 * defined for the current canonical host
+			 */
+			if (srv->vhost && res->vhost && srv->map[i].chost &&
+			    strcmp(srv->map[i].chost, res->vhost->chost)) {
+				continue;
+			}
+
+			/* swap out URI prefix */
+			memmove(uri, uri + len, strlen(uri) + 1);
+			if (prepend(uri, PATH_MAX, srv->map[i].to)) {
+				return S_REQUEST_TOO_LARGE;
+			}
+
+			if (redirect != NULL) {
+				*redirect = 1;
+			}
+
+			/* break so we don't possibly hit an infinite loop */
+			break;
+		}
+	}
+
+	return 0;
+}
+
+static enum status
+path_ensure_dirslash(char uri[PATH_MAX], int *redirect)
+{
+	size_t len;
+
+	/* append '/' to URI if not present */
+	len = strlen(uri);
+	if (len + 1 + 1 > PATH_MAX) {
+		return S_REQUEST_TOO_LARGE;
+	}
+	if (len > 0 && uri[len - 1] != '/') {
+		uri[len] = '/';
+		uri[len + 1] = '\0';
+		if (redirect != NULL) {
+			*redirect = 1;
+		}
+	}
+
+	return 0;
 }
 
 static enum status
@@ -560,60 +713,29 @@ parse_range(const char *str, size_t size, size_t *lower, size_t *upper)
 	return 0;
 }
 
-#undef RELPATH
-#define RELPATH(x) ((!*(x) || !strcmp(x, "/")) ? "." : ((x) + 1))
-
 void
 http_prepare_response(const struct request *req, struct response *res,
                       const struct server *srv)
 {
-	enum status s;
+	enum status s, tmps;
 	struct in6_addr addr;
 	struct stat st;
 	struct tm tm = { 0 };
-	struct vhost *vhost;
-	size_t len, i;
-	int dirty = 0, hasport, ipv6host;
-	static char realuri[PATH_MAX], tmpuri[PATH_MAX];
+	size_t i;
+	int redirect, hasport, ipv6host;
+	static char tmppath[PATH_MAX];
 	char *p, *mime;
-	const char *targethost;
 
 	/* empty all response fields */
 	memset(res, 0, sizeof(*res));
 
-	/*
-	 * make a working copy of the URI, strip queries and fragments
-	 * (ignorable according to RFC 3986 section 3) and normalize it
-	 */
-	memcpy(realuri, req->uri, sizeof(realuri));
-
-	if ((p = strchr(realuri, '?'))) {
-		*p = '\0';
-	} else if ((p = strchr(realuri, '#'))) {
-		*p = '\0';
-	}
-
-	switch (normabspath(realuri)) {
-	case -1:
-		s = S_BAD_REQUEST;
-		goto err;
-	case 0:
-		/* string is unchanged */
-		break;
-	case 1:
-		/* string was changed */
-		dirty = 1;
-		break;
-	}
-
-	/* match vhost */
-	vhost = NULL;
+	/* determine virtual host */
 	if (srv->vhost) {
 		for (i = 0; i < srv->vhost_len; i++) {
-			if (!regexec(&(srv->vhost[i].re), req->field[REQ_HOST],
-			             0, NULL, 0)) {
+			if (!regexec(&(srv->vhost[i].re),
+			             req->field[REQ_HOST], 0, NULL, 0)) {
 				/* we have a matching vhost */
-				vhost = &(srv->vhost[i]);
+				res->vhost = &(srv->vhost[i]);
 				break;
 			}
 		}
@@ -621,100 +743,74 @@ http_prepare_response(const struct request *req, struct response *res,
 			s = S_NOT_FOUND;
 			goto err;
 		}
-
-		/* if we have a vhost prefix, prepend it to the URI */
-		if (vhost->prefix) {
-			if (prepend(realuri, LEN(realuri), vhost->prefix)) {
-				s = S_REQUEST_TOO_LARGE;
-				goto err;
-			}
-			dirty = 1;
-		}
 	}
 
-	/* apply URI prefix mapping */
-	for (i = 0; i < srv->map_len; i++) {
-		len = strlen(srv->map[i].from);
-		if (!strncmp(realuri, srv->map[i].from, len)) {
-			/* match canonical host if vhosts are enabled and
-			 * the mapping specifies a canonical host */
-			if (srv->vhost && srv->map[i].chost &&
-			    strcmp(srv->map[i].chost, vhost->chost)) {
-				continue;
-			}
-
-			/* swap out URI prefix */
-			memmove(realuri, realuri + len, strlen(realuri) + 1);
-			if (prepend(realuri, LEN(realuri), srv->map[i].to)) {
-				s = S_REQUEST_TOO_LARGE;
-				goto err;
-			}
-			dirty = 1;
-			break;
-		}
-	}
-
-	/* normalize URI again, in case we introduced dirt */
-	switch (normabspath(realuri)) {
-	case -1:
-		s = S_BAD_REQUEST;
-		goto err;
-	case 0:
-		/* string is unchanged */
-		break;
-	case 1:
-		/* string was changed */
-		dirty = 1;
-		break;
-	}
-
-	/* stat the relative path derived from the URI */
-	if (stat(RELPATH(realuri), &st) < 0) {
-		s = (errno == EACCES) ? S_FORBIDDEN : S_NOT_FOUND;
+	/* copy request-path to response-path and clean it up */
+	redirect = 0;
+	memcpy(res->path, req->path, MIN(sizeof(res->path), sizeof(req->path)));
+	if ((tmps = path_normalize(res->path, &redirect)) ||
+	    (tmps = path_add_vhost_prefix(res->path, &redirect, srv, res)) ||
+	    (tmps = path_apply_prefix_mapping(res->path, &redirect, srv, res)) ||
+	    (tmps = path_normalize(res->path, &redirect))) {
+		s = tmps;
 		goto err;
 	}
 
-	if (S_ISDIR(st.st_mode)) {
-		/* append '/' to URI if not present */
-		len = strlen(realuri);
-		if (len + 1 + 1 > PATH_MAX) {
-			s = S_REQUEST_TOO_LARGE;
-			goto err;
-		}
-		if (len > 0 && realuri[len - 1] != '/') {
-			realuri[len] = '/';
-			realuri[len + 1] = '\0';
-			dirty = 1;
-		}
+	/* redirect all non-canonical hosts to their canonical forms */
+	if (srv->vhost && res->vhost &&
+	    strcmp(req->field[REQ_HOST], res->vhost->chost)) {
+		redirect = 1;
 	}
 
-	/*
-	 * reject hidden targets, except if it is a well-known URI
-	 * according to RFC 8615
-	 */
-	if (strstr(realuri, "/.") && strncmp(realuri,
-	    "/.well-known/", sizeof("/.well-known/") - 1)) {
+	/* reject all non-well-known hidden targets (see RFC 8615) */
+	if (strstr(res->path, "/.") && strncmp(res->path, "/.well-known/",
+	                                  sizeof("/.well-known/") - 1)) {
 		s = S_FORBIDDEN;
 		goto err;
 	}
 
 	/*
-	 * redirect if the URI needs to be redirected or the requested
-	 * host is non-canonical
+	 * generate and stat internal path based on the cleaned up request
+	 * path and the virtual host while ignoring query and fragment
+	 * (valid according to RFC 3986)
 	 */
-	if (dirty || (srv->vhost && vhost &&
-	    strcmp(req->field[REQ_HOST], vhost->chost))) {
+	if (esnprintf(res->internal_path, sizeof(res->internal_path), "/%s/%s",
+	              (srv->vhost && res->vhost) ? res->vhost->dir : "",
+		      res->path)) {
+		s = S_REQUEST_TOO_LARGE;
+		goto err;
+	}
+	if ((tmps = path_normalize(res->internal_path, NULL))) {
+		s = tmps;
+		goto err;
+	}
+	if (stat(res->internal_path, &st) < 0) {
+		s = (errno == EACCES) ? S_FORBIDDEN : S_NOT_FOUND;
+		goto err;
+	}
+
+	/*
+	 * if the path points at a directory, make sure both the path
+	 * and internal path have a trailing slash
+	 */
+	if (S_ISDIR(st.st_mode)) {
+		if ((tmps = path_ensure_dirslash(res->path, &redirect)) ||
+		    (tmps = path_ensure_dirslash(res->internal_path, NULL))) {
+			s = tmps;
+			goto err;
+		}
+	}
+
+	/* redirect if the path-cleanup necessitated it earlier */
+	if (redirect) {
 		res->status = S_MOVED_PERMANENTLY;
 
-		/* encode realuri */
-		encode(realuri, tmpuri);
+		/* encode path */
+		encode(res->path, tmppath);
 
 		/* determine target location */
-		if (srv->vhost) {
+		if (srv->vhost && res->vhost) {
 			/* absolute redirection URL */
-			targethost = req->field[REQ_HOST][0] ? vhost->chost ?
-			             vhost->chost : req->field[REQ_HOST] :
-				     srv->host ? srv->host : "localhost";
 
 			/* do we need to add a port to the Location? */
 			hasport = srv->port && strcmp(srv->port, "80");
@@ -722,70 +818,83 @@ http_prepare_response(const struct request *req, struct response *res,
 			/* RFC 2732 specifies to use brackets for IPv6-addresses
 			 * in URLs, so we need to check if our host is one and
 			 * honor that later when we fill the "Location"-field */
-			if ((ipv6host = inet_pton(AF_INET6, targethost,
+			if ((ipv6host = inet_pton(AF_INET6, res->vhost->chost,
 			                          &addr)) < 0) {
 				s = S_INTERNAL_SERVER_ERROR;
 				goto err;
 			}
 
-			/* write location to response struct */
+			/*
+			 * write location to response struct (re-including
+			 * the query and fragment, if present)
+			 */
 			if (esnprintf(res->field[RES_LOCATION],
 			              sizeof(res->field[RES_LOCATION]),
-			              "//%s%s%s%s%s%s",
+			              "//%s%s%s%s%s%s%s%s%s%s",
 			              ipv6host ? "[" : "",
-			              targethost,
-			              ipv6host ? "]" : "", hasport ? ":" : "",
-			              hasport ? srv->port : "", tmpuri)) {
+			              res->vhost->chost,
+			              ipv6host ? "]" : "",
+				      hasport ? ":" : "",
+			              hasport ? srv->port : "",
+				      tmppath,
+				      req->query[0] ? "?" : "",
+				      req->query,
+				      req->fragment[0] ? "#" : "",
+				      req->fragment)) {
 				s = S_REQUEST_TOO_LARGE;
 				goto err;
 			}
 		} else {
-			/* write relative redirection URI to response struct */
+			/*
+			 * write relative redirection URI to response struct
+			 * (re-including the query and fragment, if present)
+			 */
 			if (esnprintf(res->field[RES_LOCATION],
 			              sizeof(res->field[RES_LOCATION]),
-			              "%s", tmpuri)) {
+			              "%s%s%s%s%s",
+				      tmppath,
+				      req->query[0] ? "?" : "",
+				      req->query,
+				      req->fragment[0] ? "#" : "",
+				      req->fragment)) {
 				s = S_REQUEST_TOO_LARGE;
 				goto err;
 			}
 		}
 
 		return;
-	} else {
-		/*
-		 * the URI is well-formed, we can now write the URI into
-		 * the response-URI and corresponding relative path
-		 * (optionally including the vhost servedir as a prefix)
-		 * into the actual response-path
-		 */
-		if (esnprintf(res->uri, sizeof(res->uri), "%s", realuri)) {
-			s = S_REQUEST_TOO_LARGE;
-			goto err;
-		}
-		if (esnprintf(res->path, sizeof(res->path), "%s%s",
-		    vhost ? vhost->dir : "", RELPATH(realuri))) {
-			s = S_REQUEST_TOO_LARGE;
-			goto err;
-		}
 	}
 
 	if (S_ISDIR(st.st_mode)) {
 		/*
-		 * check if the directory index exists by appending it to
-		 * the URI
+		 * when we serve a directory, we first check if there
+		 * exists a directory index. If not, we either make
+		 * a directory listing (if enabled) or send an error
 		 */
-		if (esnprintf(tmpuri, sizeof(tmpuri), "%s%s",
-		              realuri, srv->docindex)) {
+
+		/*
+		 * append docindex to internal_path temporarily
+		 * (internal_path is guaranteed to end with '/')
+		 */
+		if (esnprintf(tmppath, sizeof(tmppath), "%s%s",
+		              res->internal_path, srv->docindex)) {
 			s = S_REQUEST_TOO_LARGE;
 			goto err;
 		}
 
-		/* stat the docindex, which must be a regular file */
-		if (stat(RELPATH(tmpuri), &st) < 0 || !S_ISREG(st.st_mode)) {
+		/* stat the temporary path, which must be a regular file */
+		if (stat(tmppath, &st) < 0 || !S_ISREG(st.st_mode)) {
 			if (srv->listdirs) {
 				/* serve directory listing */
+
+				/* check if directory is accessible */
+				if (access(res->internal_path, R_OK) != 0) {
+					s = S_FORBIDDEN;
+					goto err;
+				} else {
+					res->status = S_OK;
+				}
 				res->type = RESTYPE_DIRLISTING;
-				res->status = (access(res->path, R_OK)) ?
-				              S_FORBIDDEN : S_OK;
 
 				if (esnprintf(res->field[RES_CONTENT_TYPE],
 				              sizeof(res->field[RES_CONTENT_TYPE]),
@@ -802,8 +911,10 @@ http_prepare_response(const struct request *req, struct response *res,
 				goto err;
 			}
 		} else {
-			/* docindex is valid, write tmpuri to response-path */
-			if (esnprintf(res->path, sizeof(res->path), "%s", tmpuri)) {
+			/* the docindex exists; copy tmppath to internal path */
+			if (esnprintf(res->internal_path,
+			              sizeof(res->internal_path), "%s",
+			              tmppath)) {
 				s = S_REQUEST_TOO_LARGE;
 				goto err;
 			}
@@ -847,7 +958,7 @@ http_prepare_response(const struct request *req, struct response *res,
 
 	/* mime */
 	mime = "application/octet-stream";
-	if ((p = strrchr(res->path, '.'))) {
+	if ((p = strrchr(res->internal_path, '.'))) {
 		for (i = 0; i < LEN(mimes); i++) {
 			if (!strcmp(mimes[i].ext, p + 1)) {
 				mime = mimes[i].type;
@@ -860,7 +971,7 @@ http_prepare_response(const struct request *req, struct response *res,
 	res->type = RESTYPE_FILE;
 
 	/* check if file is readable */
-	res->status = (access(res->path, R_OK)) ? S_FORBIDDEN :
+	res->status = (access(res->internal_path, R_OK)) ? S_FORBIDDEN :
 	              (req->field[REQ_RANGE][0] != '\0') ?
 	              S_PARTIAL_CONTENT : S_OK;
 
