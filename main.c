@@ -45,15 +45,25 @@ logmsg(const struct connection *c)
 		inaddr_str[0] = '\0';
 	}
 
-	printf("%s\t%s\t%d\t%s\t%s%s%s%s%s\n", tstmp, inaddr_str, c->res.status,
-	       c->req.field[REQ_HOST], c->req.path, c->req.query[0] ? "?" : "",
-	       c->req.query, c->req.fragment[0] ? "#" : "", c->req.fragment);
+	printf("%s\t%s\t%s%.*d\t%s\t%s%s%s%s%s\n",
+	       tstmp,
+	       inaddr_str,
+	       (c->res.status == 0) ? "dropped" : "",
+	       (c->res.status == 0) ? 0 : 3,
+	       c->res.status,
+	       c->req.field[REQ_HOST][0] ? c->req.field[REQ_HOST] : "-",
+	       c->req.path[0] ? c->req.path : "-",
+	       c->req.query[0] ? "?" : "",
+	       c->req.query,
+	       c->req.fragment[0] ? "#" : "",
+	       c->req.fragment);
 }
 
 static void
-close_connection(struct connection *c)
+reset_connection(struct connection *c)
 {
 	if (c != NULL) {
+		shutdown(c->fd, SHUT_RDWR);
 		close(c->fd);
 		memset(c, 0, sizeof(*c));
 	}
@@ -152,7 +162,53 @@ response:
 	}
 err:
 	logmsg(c);
-	close_connection(c);
+	reset_connection(c);
+}
+
+static struct connection *
+get_connection_drop_candidate(struct connection *connection, size_t nslots)
+{
+	struct connection *c, *minc;
+	size_t i, j, maxcnt, cnt;
+
+	/*
+	 * determine the most-unimportant connection 'minc' of the in-address
+	 * with most connections; this algorithm has a complexity of O(n²)
+	 * in time but is O(1) in space; there are algorithms with O(n) in
+	 * time and space, but this would require memory allocation,
+	 * which we avoid. Given the simplicity of the inner loop and
+	 * relatively small number of slots per thread, this is fine.
+	 */
+	for (i = 0, minc = NULL, maxcnt = 0; i < nslots; i++) {
+		/*
+		 * the c is used to minimize in regard to importance
+		 * within the same-address-group
+		 */
+		c = &connection[i];
+
+		for (j = 0, cnt = 0; j < nslots; j++) {
+			if (!sock_same_addr(&connection[i].ia,
+			                    &connection[j].ia)) {
+				continue;
+			}
+			cnt++;
+
+			if (connection[j].state < c->state) {
+				/*
+				 * we have found a connection with an
+				 * even lower state and thus lower
+				 * importance
+				 */
+				c = &connection[j];
+			}
+		}
+		if (cnt > maxcnt) {
+			minc = c;
+			maxcnt = cnt;
+		}
+	}
+
+	return minc;
 }
 
 struct connection *
@@ -160,33 +216,61 @@ accept_connection(int insock, struct connection *connection,
                   size_t nslots)
 {
 	struct connection *c = NULL;
-	size_t j;
+	size_t i;
 
 	/* find vacant connection (i.e. one with no fd assigned to it) */
-	for (j = 0; j < nslots; j++) {
-		if (connection[j].fd == 0) {
-			c = &connection[j];
+	for (i = 0; i < nslots; i++) {
+		if (connection[i].fd == 0) {
+			c = &connection[i];
 			break;
 		}
 	}
-	if (j == nslots) {
-		/* nothing available right now, return without accepting */
-
-		/* 
-		 * NOTE: This is currently still not the best option, but
-		 * at least we now have control over it and can reap a
-		 * connection from our pool instead of previously when
-		 * we were forking and were more or less on our own in
-		 * each process
+	if (i == nslots) {
+		/*
+		 * all our connection-slots are occupied and the only
+		 * way out is to drop another connection, because not
+		 * accepting this connection just kicks this can further
+		 * down the road (to the next queue_wait()) without
+		 * solving anything.
+		 *
+		 * This may sound bad, but this case can only be hit
+		 * either when there's a (D)DoS-attack or a massive
+		 * influx of requests. The latter is impossible to solve
+		 * at this moment without expanding resources, but the
+		 * former has certain characteristics allowing us to
+		 * handle this gracefully.
+		 *
+		 * During an attack (e.g. Slowloris, R-U-Dead-Yet, Slow
+		 * Read or just plain flooding) we can not see who is
+		 * waiting to be accept()ed.
+		 * However, an attacker usually already has many
+		 * connections open (while well-behaved clients could
+		 * do everything with just one connection using
+		 * keep-alive). Inferring a likely attacker-connection
+		 * is an educated guess based on which in-address is
+		 * occupying the most connection slots. Among those,
+		 * connections in early stages (receiving or sending
+		 * headers) are preferred over connections in late
+		 * stages (sending body).
+		 *
+		 * This quantitative approach effectively drops malicious
+		 * connections while preserving even long-running
+		 * benevolent connections like downloads.
 		 */
-		return NULL;
+		c = get_connection_drop_candidate(connection, nslots);
+		c->res.status = 0;
+		logmsg(c);
+		reset_connection(c);
 	}
 
 	/* accept connection */
 	if ((c->fd = accept(insock, (struct sockaddr *)&c->ia,
 	                    &(socklen_t){sizeof(c->ia)})) < 0) {
 		if (errno != EAGAIN && errno != EWOULDBLOCK) {
-			/* not much we can do here */
+			/*
+			 * this should not happen, as we received the
+			 * event that there are pending connections here
+			 */
 			warn("accept:");
 		}
 		return NULL;
@@ -250,10 +334,10 @@ thread_method(void *data)
 			if (queue_event_is_error(&event[i])) {
 				if (c != NULL) {
 					queue_rem_fd(qfd, c->fd);
-					close_connection(c);
+					c->res.status = 0;
+					logmsg(c);
+					reset_connection(c);
 				}
-
-				printf("dropped a connection\n");
 
 				continue;
 			}
@@ -301,7 +385,7 @@ thread_method(void *data)
 					if (queue_mod_fd(qfd, c->fd,
 					                 QUEUE_EVENT_IN,
 					                 c) < 0) {
-						close_connection(c);
+						reset_connection(c);
 						break;
 					}
 					break;
@@ -310,7 +394,7 @@ thread_method(void *data)
 					if (queue_mod_fd(qfd, c->fd,
 					                 QUEUE_EVENT_OUT,
 					                 c) < 0) {
-						close_connection(c);
+						reset_connection(c);
 						break;
 					}
 					break;

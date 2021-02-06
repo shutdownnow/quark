@@ -222,3 +222,25 @@ sock_get_inaddr_str(const struct sockaddr_storage *in_sa, char *str,
 
 	return 0;
 }
+
+int
+sock_same_addr(const struct sockaddr_storage *sa1, const struct sockaddr_storage *sa2)
+{
+	/* return early if address-families don't match */
+	if (sa1->ss_family != sa2->ss_family) {
+		return 0;
+	}
+
+	switch (sa1->ss_family) {
+	case AF_INET6:
+		return memcmp(((struct sockaddr_in6 *)sa1)->sin6_addr.s6_addr,
+		              ((struct sockaddr_in6 *)sa2)->sin6_addr.s6_addr,
+		              sizeof(((struct sockaddr_in6 *)sa1)->sin6_addr.s6_addr));
+	case AF_INET:
+		return ntohl(((struct sockaddr_in *)sa1)->sin_addr.s_addr) ==
+		       ntohl(((struct sockaddr_in *)sa2)->sin_addr.s_addr);
+	default: /* AF_UNIX */
+		return strcmp(((struct sockaddr_un *)sa1)->sun_path,
+		              ((struct sockaddr_un *)sa2)->sun_path) == 0;
+	}
+}
