@@ -181,8 +181,12 @@ get_connection_drop_candidate(struct connection *connection, size_t nslots)
 	 */
 	for (i = 0, minc = NULL, maxcnt = 0; i < nslots; i++) {
 		/*
-		 * the c is used to minimize in regard to importance
-		 * within the same-address-group
+		 * we determine how many connections have the same
+		 * in-address as connection[i], but also minimize over
+		 * that set with other criteria, yielding a general
+		 * minimizer c. We first set it to connection[i] and
+		 * update it, if a better candidate shows up, in the inner
+		 * loop
 		 */
 		c = &connection[i];
 
@@ -193,16 +197,46 @@ get_connection_drop_candidate(struct connection *connection, size_t nslots)
 			}
 			cnt++;
 
+			/* minimize over state */
 			if (connection[j].state < c->state) {
-				/*
-				 * we have found a connection with an
-				 * even lower state and thus lower
-				 * importance
-				 */
 				c = &connection[j];
+			} else if (connection[j].state == c->state) {
+				/* minimize over progress */
+				if (c->state == C_SEND_BODY &&
+				    connection[i].res.type != c->res.type) {
+					/*
+					 * mixed response types; progress
+					 * is not comparable
+					 *
+					 * the res-type-enum is ordered as
+					 * DIRLISTING, ERROR, FILE, i.e.
+					 * in rising priority, because a
+					 * file transfer is most important,
+					 * followed by error-messages.
+					 * Dirlistings as an "interactive"
+					 * feature (that take up lots of
+					 * resources) have the lowest
+					 * priority
+					 */
+					if (connection[i].res.type <
+					    c->res.type) {
+						c = &connection[j];
+					}
+				} else if (connection[j].progress <
+				           c->progress) {
+					/*
+					 * for C_SEND_BODY with same response
+					 * type, C_RECV_HEADER and C_SEND_BODY
+					 * it is sufficient to compare the
+					 * raw progress
+					 */
+					c = &connection[j];
+				}
 			}
 		}
+
 		if (cnt > maxcnt) {
+			/* this run yielded an even greedier in-address */
 			minc = c;
 			maxcnt = cnt;
 		}

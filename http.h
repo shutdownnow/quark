@@ -65,9 +65,9 @@ enum res_field {
 extern const char *res_field_str[];
 
 enum res_type {
+	RESTYPE_DIRLISTING,
 	RESTYPE_ERROR,
 	RESTYPE_FILE,
-	RESTYPE_DIRLISTING,
 	NUM_RES_TYPES,
 };
 

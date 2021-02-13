@@ -13,9 +13,9 @@
 
 enum status (* const data_fct[])(const struct response *,
                                  struct buffer *, size_t *) = {
+	[RESTYPE_DIRLISTING] = data_prepare_dirlisting_buf,
 	[RESTYPE_ERROR]      = data_prepare_error_buf,
 	[RESTYPE_FILE]       = data_prepare_file_buf,
-	[RESTYPE_DIRLISTING] = data_prepare_dirlisting_buf,
 };
 
 static int
