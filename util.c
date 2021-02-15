@@ -123,6 +123,79 @@ prepend(char *str, size_t size, const char *prefix)
 	return 0;
 }
 
+int
+spacetok(const char *s, char **t, size_t tlen)
+{
+	const char *tok;
+	size_t i, j, toki, spaces;
+
+	/* fill token-array with NULL-pointers */
+	for (i = 0; i < tlen; i++) {
+		t[i] = NULL;
+	}
+	toki = 0;
+
+	/* don't allow NULL string or leading spaces */
+	if (!s || *s == ' ') {
+		return 1;
+	}
+start:
+	/* skip spaces */
+	for (; *s == ' '; s++)
+		;
+
+	/* don't allow trailing spaces */
+	if (*s == '\0') {
+		goto err;
+	}
+
+	/* consume token */
+	for (tok = s, spaces = 0; ; s++) {
+		if (*s == '\\' && *(s + 1) == ' ') {
+			spaces++;
+			s++;
+			continue;
+		} else if (*s == ' ') {
+			/* end of token */
+			goto token;
+		} else if (*s == '\0') {
+			/* end of string */
+			goto token;
+		}
+	}
+token:
+	if (toki >= tlen) {
+		goto err;
+	}
+	if (!(t[toki] = malloc(s - tok - spaces + 1))) {
+		die("malloc:");
+	}
+	for (i = 0, j = 0; j < s - tok - spaces + 1; i++, j++) {
+		if (tok[i] == '\\' && tok[i + 1] == ' ') {
+			i++;
+		}
+		t[toki][j] = tok[i];
+	}
+	t[toki][s - tok - spaces] = '\0';
+	toki++;
+
+	if (*s == ' ') {
+		s++;
+		goto start;
+	}
+
+	return 0;
+err:
+	for (i = 0; i < tlen; i++) {
+		free(t[i]);
+		t[i] = NULL;
+	}
+
+	return 1;
+}
+
+
+
 #define	INVALID  1
 #define	TOOSMALL 2
 #define	TOOLARGE 3

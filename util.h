@@ -8,32 +8,6 @@
 
 #include "config.h"
 
-/* main server struct */
-struct vhost {
-	char *chost;
-	char *regex;
-	char *dir;
-	char *prefix;
-	regex_t re;
-};
-
-struct map {
-	char *chost;
-	char *from;
-	char *to;
-};
-
-struct server {
-	char *host;
-	char *port;
-	char *docindex;
-	int listdirs;
-	struct vhost *vhost;
-	size_t vhost_len;
-	struct map *map;
-	size_t map_len;
-};
-
 /* general purpose buffer */
 struct buffer {
 	char data[BUFFER_SIZE];
@@ -58,6 +32,7 @@ void eunveil(const char *, const char *);
 int timestamp(char *, size_t, time_t);
 int esnprintf(char *, size_t, const char *, ...);
 int prepend(char *, size_t, const char *);
+int spacetok(const char *, char **, size_t);
 
 void *reallocarray(void *, size_t, size_t);
 long long strtonum(const char *, long long, long long, const char **);

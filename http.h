@@ -6,6 +6,7 @@
 #include <sys/socket.h>
 
 #include "config.h"
+#include "server.h"
 #include "util.h"
 
 enum req_field {
@@ -82,24 +83,6 @@ struct response {
 		size_t lower;
 		size_t upper;
 	} file;
-};
-
-enum conn_state {
-	C_VACANT,
-	C_RECV_HEADER,
-	C_SEND_HEADER,
-	C_SEND_BODY,
-	NUM_CONN_STATES,
-};
-
-struct connection {
-	enum conn_state state;
-	int fd;
-	struct sockaddr_storage ia;
-	struct request req;
-	struct response res;
-	struct buffer buf;
-	size_t progress;
 };
 
 enum status http_prepare_header_buf(const struct response *, struct buffer *);
