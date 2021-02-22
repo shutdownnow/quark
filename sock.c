@@ -18,8 +18,7 @@
 #include "util.h"
 
 int
-sock_get_ips_arr(const char *host, const char* port, int *sockfd,
-                 size_t sockfdlen)
+sock_get_ips(const char *host, const char* port)
 {
 	struct addrinfo hints = {
 		.ai_flags    = AI_NUMERICSERV,
@@ -27,71 +26,88 @@ sock_get_ips_arr(const char *host, const char* port, int *sockfd,
 		.ai_socktype = SOCK_STREAM,
 	};
 	struct addrinfo *ai, *p;
-	int r;
-	size_t i, j;
+	int ret, insock = 0;
 
-	if ((r = getaddrinfo(host, port, &hints, &ai))) {
-		warn("getaddrinfo: %s", gai_strerror(r));
-		return 1;
+	if ((ret = getaddrinfo(host, port, &hints, &ai))) {
+		die("getaddrinfo: %s", gai_strerror(ret));
 	}
 
 	for (p = ai; p; p = p->ai_next) {
-		/* try generating sockfds */
-		for (i = 0; i < sockfdlen; i++) {
-			if ((sockfd[i] = socket(p->ai_family, p->ai_socktype,
-			                        p->ai_protocol)) < 0) {
-				/* retry with the next addrinfo */
-				break;
-			}
-
-			/*
-			 * set SO_REUSEPORT, so it becomes possible to bind
-			 * to the same port with multiple sockets, which
-			 * is what we're doing here
-			 */
-			if (setsockopt(sockfd[i], SOL_SOCKET, SO_REUSEPORT,
-			               &(int){1}, sizeof(int)) < 0) {
-				warn("setsockopt:");
-				return 1;
-			}
-
-			if (bind(sockfd[i], p->ai_addr, p->ai_addrlen) < 0) {
-				/* bind failed, close all previous fd's and retry */
-				for (j = 0; j <= i; j++) {
-					if (close(sockfd[i]) < 0) {
-						warn("close:");
-						return 1;
-					}
-				}
-				break;
-			}
+		if ((insock = socket(p->ai_family, p->ai_socktype,
+		                     p->ai_protocol)) < 0) {
+			continue;
 		}
-		if (i == sockfdlen) {
-			/* we have generated all requested fds */
-			break;
+		if (setsockopt(insock, SOL_SOCKET, SO_REUSEADDR,
+		               &(int){1}, sizeof(int)) < 0) {
+			die("setsockopt:");
 		}
+		if (bind(insock, p->ai_addr, p->ai_addrlen) < 0) {
+			/* bind failed, close the insock and retry */
+			if (close(insock) < 0) {
+				die("close:");
+			}
+			continue;
+		}
+		break;
 	}
 	freeaddrinfo(ai);
 	if (!p) {
 		/* we exhaustet the addrinfo-list and found no connection */
 		if (errno == EACCES) {
-			warn("You need to run as root or have "
-			     "CAP_NET_BIND_SERVICE set to bind to "
-			     "privileged ports");
+			die("You need to run as root or have "
+			    "CAP_NET_BIND_SERVICE set to bind to "
+			    "privileged ports");
 		} else {
-			warn("bind:");
-		}
-		return 1;
-	}
-
-	for (i = 0; i < sockfdlen; i++) {
-		if (listen(sockfd[i], SOMAXCONN) < 0) {
-			warn("listen:");
-			return 1;
+			die("bind:");
 		}
 	}
 
-	return 0;
+	if (listen(insock, SOMAXCONN) < 0) {
+		die("listen:");
+	}
+
+	return insock;
+}
+
+int
+sock_get_uds(const char *udsname, uid_t uid, gid_t gid)
+{
+	struct sockaddr_un addr = {
+		.sun_family = AF_UNIX,
+	};
+	size_t udsnamelen;
+	int insock, sockmode = S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP |
+	                       S_IROTH | S_IWOTH;
+
+	if ((insock = socket(AF_UNIX, SOCK_STREAM, 0)) < 0) {
+		die("socket:");
+	}
+
+	if ((udsnamelen = strlen(udsname)) > sizeof(addr.sun_path) - 1) {
+		die("UNIX-domain socket name truncated");
+	}
+	memcpy(addr.sun_path, udsname, udsnamelen + 1);
+
+	if (bind(insock, (const struct sockaddr *)&addr, sizeof(addr)) < 0) {
+		die("bind '%s':", udsname);
+	}
+
+	if (listen(insock, SOMAXCONN) < 0) {
+		sock_rem_uds(udsname);
+		die("listen:");
+	}
+
+	if (chmod(udsname, sockmode) < 0) {
+		sock_rem_uds(udsname);
+		die("chmod '%s':", udsname);
+	}
+
+	if (chown(udsname, uid, gid) < 0) {
+		sock_rem_uds(udsname);
+		die("chown '%s':", udsname);
+	}
+
+	return insock;
 }
 
 void
@@ -100,62 +116,6 @@ sock_rem_uds(const char *udsname)
 	if (unlink(udsname) < 0) {
 		die("unlink '%s':", udsname);
 	}
-}
-
-int
-sock_get_uds_arr(const char *udsname, uid_t uid, gid_t gid, int *sockfd,
-                 size_t sockfdlen)
-{
-	struct sockaddr_un addr = {
-		.sun_family = AF_UNIX,
-	};
-	size_t udsnamelen, i;
-	int insock, sockmode = S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP |
-	                       S_IROTH | S_IWOTH;
-
-	if ((insock = socket(AF_UNIX, SOCK_STREAM, 0)) < 0) {
-		warn("socket:");
-		return 1;
-	}
-
-	if ((udsnamelen = strlen(udsname)) > sizeof(addr.sun_path) - 1) {
-		warn("UNIX-domain socket name truncated");
-		return 1;
-	}
-	memcpy(addr.sun_path, udsname, udsnamelen + 1);
-
-	if (bind(insock, (const struct sockaddr *)&addr, sizeof(addr)) < 0) {
-		warn("bind '%s':", udsname);
-		return 1;
-	}
-
-	if (listen(insock, SOMAXCONN) < 0) {
-		sock_rem_uds(udsname);
-		warn("listen:");
-		return 1;
-	}
-
-	if (chmod(udsname, sockmode) < 0) {
-		sock_rem_uds(udsname);
-		warn("chmod '%s':", udsname);
-		return 1;
-	}
-
-	if (chown(udsname, uid, gid) < 0) {
-		sock_rem_uds(udsname);
-		warn("chown '%s':", udsname);
-		return 1;
-	}
-
-	for (i = 0; i < sockfdlen; i++) {
-		/*
-		 * we can't bind to an AF_UNIX socket more than once,
-		 * so we just reuse the same fd on all threads.
-		 */
-		sockfd[i] = insock;
-	}
-
-	return 0;
 }
 
 int

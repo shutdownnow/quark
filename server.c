@@ -134,7 +134,7 @@ server_worker(void *data)
 }
 
 void
-server_init_thread_pool(int *insock, size_t nthreads, size_t nslots,
+server_init_thread_pool(int insock, size_t nthreads, size_t nslots,
                         const struct server *srv)
 {
 	pthread_t *thread = NULL;
@@ -146,7 +146,7 @@ server_init_thread_pool(int *insock, size_t nthreads, size_t nslots,
 		die("reallocarray:");
 	}
 	for (i = 0; i < nthreads; i++) {
-		d[i].insock = insock[i];
+		d[i].insock = insock;
 		d[i].nslots = nslots;
 		d[i].srv = srv;
 	}

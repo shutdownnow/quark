@@ -72,7 +72,7 @@ main(int argc, char *argv[])
 		.docindex = "index.html",
 	};
 	size_t i;
-	int *insock = NULL, status = 0;
+	int insock, status = 0;
 	const char *err;
 	char *tok[4];
 
@@ -214,21 +214,31 @@ main(int argc, char *argv[])
 		}
 	}
 
-	/* create a nonblocking listening socket for each thread */
-	if (!(insock = reallocarray(insock, nthreads, sizeof(*insock)))) {
-		die("reallocarray:");
-	}
-	if (udsname ? sock_get_uds_arr(udsname, pwd->pw_uid, grp->gr_gid,
-	                               insock, nthreads) :
-	              sock_get_ips_arr(srv.host, srv.port, insock, nthreads)) {
+	/*
+	 * create the (non-blocking) listening socket
+	 *
+	 * we could use SO_REUSEPORT and create a listening socket for
+	 * each thread (for better load-balancing, given each thread
+	 * would get his own kernel-queue), but this increases latency
+	 * (as a thread might get stuck on a larger request, making all
+	 * other request wait in line behind it).
+	 *
+	 * socket contention with a single listening socket is a
+	 * non-issue and thread-load-balancing is better fixed in the
+	 * kernel by changing epoll-sheduling from a FIFO- to a
+	 * LIFO-model, especially as it doesn't affect performance
+	 */
+	insock = udsname ? sock_get_uds(udsname, pwd->pw_uid, grp->gr_gid) :
+	                   sock_get_ips(srv.host, srv.port);
+	if (sock_set_nonblocking(insock)) {
 		return 1;
 	}
-	for (i = 0; i < nthreads; i++) {
-		if (sock_set_nonblocking(insock[i])) {
-			return 1;
-		}
-	}
 
+	/*
+	 * before dropping privileges, we fork, as we need to remove
+	 * the UNIX-domain socket when we shut down, which we need
+	 * privileges for
+	 */
 	switch (fork()) {
 	case -1:
 		warn("fork:");

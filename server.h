@@ -30,6 +30,6 @@ struct server {
 	size_t map_len;
 };
 
-void server_init_thread_pool(int *, size_t, size_t, const struct server *);
+void server_init_thread_pool(int, size_t, size_t, const struct server *);
 
 #endif /* SERVER_H */
