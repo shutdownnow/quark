@@ -176,8 +176,11 @@ sock_get_inaddr_str(const struct sockaddr_storage *in_sa, char *str,
 			return 1;
 		}
 		break;
-	default:
+	case AF_UNIX:
 		snprintf(str, len, "uds");
+		break;
+	default:
+		snprintf(str, len, "-");
 	}
 
 	return 0;
