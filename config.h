@@ -32,6 +32,7 @@ static const struct {
 	{ "mp3",   "audio/mpeg" },
 	{ "ogg",   "audio/ogg" },
 	{ "mp4",   "video/mp4" },
+	{ "flv",   "video/flv" },
 	{ "ogv",   "video/ogg" },
 	{ "webm",  "video/webm" },
 };

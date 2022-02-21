@@ -113,7 +113,13 @@ data_prepare_dirlisting_buf(const struct response *res,
 		html_escape(res->path, esc, MIN(PATH_MAX, sizeof(esc)));
 		if (buffer_appendf(buf,
 		                   "<!DOCTYPE html>\n<html>\n\t<head>"
-		                   "<title>Index of %s</title></head>\n"
+		                   "<title>Index of %s</title>\n"
+						   "<style>\n"
+						   "body{margin:0;}\n"
+						   "a{width:50%;color:#42b983;text-decoration:none;margin:8px 0 8px calc(25%% - 10px);padding:5px 10px;display:inline-block;border-bottom:#42b983 1px dashed;}\n"
+						   "a:hover{cursor:pointer;border-radius:3px;background-color:gainsboro;}\n"
+						   "</style>\n"
+						   "</head>\n"
 		                   "\t<body>\n\t\t<a href=\"..\">..</a>",
 		                   esc) < 0) {
 			s = S_REQUEST_TIMEOUT;
