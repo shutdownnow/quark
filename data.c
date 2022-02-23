@@ -113,14 +113,17 @@ data_prepare_dirlisting_buf(const struct response *res,
 		html_escape(res->path, esc, MIN(PATH_MAX, sizeof(esc)));
 		if (buffer_appendf(buf,
 		                   "<!DOCTYPE html>\n<html>\n\t<head>"
-		                   "<title>Index of %s</title>\n"
+		                   "<title>File Server</title>\n"
 						   "<style>\n"
-						   "body{margin:0;}\n"
-						   "a{width:50%;color:#42b983;text-decoration:none;margin:8px 0 8px calc(25%% - 10px);padding:5px 10px;display:inline-block;border-bottom:#42b983 1px dashed;}\n"
+						   "@media (prefers-color-scheme: dark){body {color:#fff;background:#000}a:hover{background-color:aquamarine !important}}\n"
+						   "body{margin:1em auto;max-width:40em;padding:0 .62em;font:1.2em/1.62 sans-serif}\n"
+						   "h1,h2,h3{line-height:1.2;color:#42b983}\n"
+						   "a{width:100%;text-decoration:none;color:#42b983;margin:8px 0;padding:5px 10px;display:inline-block;border-bottom:#42b983 1px dashed;}\n"
 						   "a:hover{cursor:pointer;border-radius:3px;background-color:gainsboro;}\n"
+						   "@media print{body{max-width:none}}\n"
 						   "</style>\n"
 						   "</head>\n"
-		                   "\t<body>\n\t\t<a href=\"..\">..</a>",
+		                   "\t<body>\n<h3>Index of %s</h3>\n\t\t<a href=\"..\">..</a>",
 		                   esc) < 0) {
 			s = S_REQUEST_TIMEOUT;
 			goto cleanup;
